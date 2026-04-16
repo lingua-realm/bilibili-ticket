@@ -8,7 +8,8 @@
 - 单演出内按 `date_priority` 再按 `price_priority` 抢票
 - 白名单外日期和票价不会参与下单
 - 同一演出一旦锁单成功，立即停止该演出的其他候选
-- 锁单成功后通过企业微信群机器人通知
+- 支持守护模式，异常退出后自动拉起并防止重复实例
+- 锁单成功后通过企业微信群机器人发送可点击支付通知
 - 支持提前人工二维码登录并长期复用会话
 
 明确不做的事情：
@@ -54,11 +55,11 @@ shows:
       - 2026-05-01
       - 2026-05-02
     price_priority:
-      - 680
-      - 480
+      - 6800
+      - 4800
     allowed_skus:
-      - 680
-      - 480
+      - 6800
+      - 4800
     count: 1
     buyer_names:
       - 张三
@@ -71,6 +72,7 @@ shows:
 - 先按 `date_priority`
 - 再按 `price_priority`
 - 只有同时出现在优先级白名单里的候选才会尝试下单
+- `price_priority` 和 `allowed_skus` 的单位是“分”，例如 `68元` 写成 `6800`
 
 ### 2. 登录并保存会话
 
@@ -116,12 +118,33 @@ uv run python -m bilibili_ticket.app run --config configs/tasks.local.yaml
 ```
 
 不带 `--once` 时，程序会持续轮询并监控回流。若启动时缺少登录态，也会先自动等待登录成功，再进入正式监控。
+同一演出锁单后，如果订单后来变成已取消、已失效或不再待支付，监控会自动恢复，不需要手动重启。
+
+### 6. 用守护模式值守 24h
+
+```bash
+uv run python -m bilibili_ticket.app daemon --config configs/tasks.local.yaml
+```
+
+守护模式会做两件事：
+
+- 保证同一份配置只启动一个监控实例
+- 监控进程异常退出后自动按固定退避时间重启
+
+可选参数：
+
+```bash
+uv run python -m bilibili_ticket.app daemon \
+  --config configs/tasks.local.yaml \
+  --restart-delay 3 \
+  --lock-file data/monitor.lock
+```
 
 ## 通知
 
 企业微信群机器人有两类通知：
 
-- 锁单成功：包含演出 ID、日期、票价、订单号
+- 锁单成功：包含演出标题、日期、票价、票种、购票人摘要、总金额、剩余支付时间、订单号和可点击支付链接
 - 人工接管：包含演出 ID、日期、票价、暂停原因；如果是需要重新登录，会额外附带最新登录链接和二维码图片
 
 锁单成功后，你需要自己打开订单页面完成支付。
