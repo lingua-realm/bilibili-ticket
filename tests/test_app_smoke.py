@@ -17,6 +17,7 @@ def test_cli_help(capsys):
     captured = capsys.readouterr()
     assert "login" in captured.out
     assert "run" in captured.out
+    assert "daemon" in captured.out
 
 
 def test_cli_dry_run_uses_example_config(tmp_path, capsys):
@@ -345,3 +346,34 @@ def test_cli_run_waits_for_login_and_then_calls_runtime_scheduler(tmp_path, monk
     assert str(event.qr_image_path).endswith("data/login-qr.png")
     assert captured["session_snapshot"] == {"SESSDATA": "abc", "bili_jct": "csrf"}
     assert captured["once"] is True
+
+
+def test_cli_daemon_delegates_to_guarded_runner(tmp_path, monkeypatch):
+    import bilibili_ticket.app as app
+
+    captured = {}
+
+    def fake_handle_daemon(config_path, restart_delay, lock_file):
+        captured["config_path"] = config_path
+        captured["restart_delay"] = restart_delay
+        captured["lock_file"] = lock_file
+        return 0
+
+    monkeypatch.setattr(app, "_handle_daemon", fake_handle_daemon)
+
+    exit_code = app.main(
+        [
+            "daemon",
+            "--config",
+            str(tmp_path / "tasks.yaml"),
+            "--restart-delay",
+            "2.5",
+            "--lock-file",
+            str(tmp_path / "daemon.lock"),
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["config_path"] == str(tmp_path / "tasks.yaml")
+    assert captured["restart_delay"] == 2.5
+    assert captured["lock_file"] == str(tmp_path / "daemon.lock")

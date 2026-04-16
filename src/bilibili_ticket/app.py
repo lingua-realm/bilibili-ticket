@@ -11,6 +11,7 @@ from bilibili_ticket.bilibili.login import (
 )
 from bilibili_ticket.bilibili.order_service import OrderService
 from bilibili_ticket.config import load_app_config
+from bilibili_ticket.daemon import AlreadyRunningError, run_guarded
 from bilibili_ticket.notifier.wecom import (
     LoginQRCodeEvent,
     WeComNotifier,
@@ -34,6 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--dry-run", action="store_true")
     run_parser.add_argument("--once", action="store_true")
 
+    daemon_parser = subparsers.add_parser("daemon")
+    daemon_parser.add_argument("--config", required=True)
+    daemon_parser.add_argument("--restart-delay", type=float, default=3.0)
+    daemon_parser.add_argument("--lock-file")
+
     return parser
 
 
@@ -47,6 +53,10 @@ def _handle_login(session_file: str, config_path: str | None = None) -> int:
 
 def _handle_run(config_path: str, dry_run: bool, once: bool) -> int:
     config = load_app_config(config_path)
+    return _run_with_config(config=config, dry_run=dry_run, once=once)
+
+
+def _run_with_config(config, *, dry_run: bool, once: bool) -> int:
     notifier = _build_notifier(config.notifier.type, config.notifier.webhook)
     session_store = SessionStore(config.account.session_file)
     if dry_run:
@@ -78,6 +88,24 @@ def _handle_run(config_path: str, dry_run: bool, once: bool) -> int:
     return run_scheduler(manager=manager, notifier=notifier, once=once)
 
 
+def _handle_daemon(
+    config_path: str,
+    restart_delay: float,
+    lock_file: str | None,
+) -> int:
+    config = load_app_config(config_path)
+    resolved_lock_file = lock_file or str(_default_lock_file(config.account.session_file))
+    try:
+        return run_guarded(
+            target=lambda: _run_with_config(config=config, dry_run=False, once=False),
+            lock_file=resolved_lock_file,
+            restart_delay=restart_delay,
+        )
+    except AlreadyRunningError as exc:
+        print(str(exc))
+        return 1
+
+
 def _build_runner_factory():
     def factory(show_config, session_snapshot):
         client = BilibiliClient(cookies=session_snapshot)
@@ -89,6 +117,7 @@ def _build_runner_factory():
             price_priority=show_config.price_priority,
             available_candidates_provider=lambda: order_service.list_available_candidates(runtime),
             order_executor=lambda candidate: order_service.attempt_candidate(runtime, candidate),
+            locked_order_resume_checker=order_service.should_resume_locked_order,
         )
         runner.display_name = runtime.project_name
         return runner
@@ -173,6 +202,11 @@ def _fetch_project_title(client: BilibiliClient, project_id: int) -> str | None:
     return str(name)
 
 
+def _default_lock_file(session_file: str) -> Path:
+    session_path = Path(session_file)
+    return session_path.parent / "monitor.lock"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -181,6 +215,8 @@ def main(argv: list[str] | None = None) -> int:
         return _handle_login(args.session_file, args.config)
     if args.command == "run":
         return _handle_run(args.config, args.dry_run, args.once)
+    if args.command == "daemon":
+        return _handle_daemon(args.config, args.restart_delay, args.lock_file)
 
     parser.print_help()
     raise SystemExit(0)
