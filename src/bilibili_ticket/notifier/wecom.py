@@ -13,6 +13,11 @@ class LockSuccessEvent:
     show_id: str
     candidate: tuple[str, int]
     order_id: int
+    order_url: str | None = None
+    pay_money: int | None = None
+    pay_remain_seconds: int | None = None
+    buyer_summary: str | None = None
+    ticket_name: str | None = None
 
 
 @dataclass(slots=True)
@@ -38,15 +43,24 @@ class WeComNotifier:
 
     def send_lock_success(self, event: LockSuccessEvent) -> None:
         date_text, price = event.candidate
-        self._send_markdown(
-            (
-                f"**锁单成功**\n"
-                f"> 演出: `{event.show_id}`\n"
-                f"> 日期: `{date_text}`\n"
-                f"> 票价: `{price}`\n"
-                f"> 订单号: `{event.order_id}`"
-            )
-        )
+        lines = [
+            "**笑死，抢到票了**",
+            f"> 演出: `{event.show_id}`",
+            f"> 日期: `{date_text}`",
+            f"> 票价: `{self._format_amount(price)}`",
+        ]
+        if event.ticket_name:
+            lines.append(f"> 票种: `{event.ticket_name}`")
+        if event.buyer_summary:
+            lines.append(f"> 购票人: `{event.buyer_summary}`")
+        if event.pay_money is not None:
+            lines.append(f"> 总金额: `{self._format_amount(event.pay_money)}`")
+        if event.pay_remain_seconds is not None:
+            lines.append(f"> 剩余支付时间: `{self._format_duration(event.pay_remain_seconds)}`")
+        lines.append(f"> 订单号: `{event.order_id}`")
+        if event.order_url:
+            lines.append(f"> 支付链接: [点击去支付]({event.order_url})")
+        self._send_markdown("\n".join(lines))
 
     def send_human_takeover(self, event: HumanInterventionEvent) -> None:
         lines = [
@@ -56,7 +70,7 @@ class WeComNotifier:
         if event.candidate is not None:
             date_text, price = event.candidate
             lines.append(f"> 日期: `{date_text}`")
-            lines.append(f"> 票价: `{price}`")
+            lines.append(f"> 票价: `{self._format_amount(price)}`")
         lines.append(f"> 原因: `{event.reason}`")
         if event.login_url:
             lines.append(f"> 登录链接: [点击重新登录]({event.login_url})")
@@ -102,3 +116,12 @@ class WeComNotifier:
             },
         )
         response.raise_for_status()
+
+    @staticmethod
+    def _format_amount(amount: int) -> str:
+        return f"{amount / 100:.2f}元"
+
+    @staticmethod
+    def _format_duration(seconds: int) -> str:
+        minutes, remain_seconds = divmod(max(seconds, 0), 60)
+        return f"{minutes}分{remain_seconds:02d}秒"

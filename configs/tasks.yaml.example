@@ -12,11 +12,11 @@ shows:
       - 2026-05-01
       - 2026-05-02
     price_priority:
-      - 680
-      - 480
+      - 6800
+      - 4800
     allowed_skus:
-      - 680
-      - 480
+      - 6800
+      - 4800
     count: 1
     buyer_names:
       - 张三

@@ -314,6 +314,82 @@ def test_attempt_candidate_prepares_and_creates_order(order_service, respx_mock)
     assert "101" in sent_payload
 
 
+def test_attempt_candidate_enriches_success_result_with_order_info(order_service, respx_mock):
+    from bilibili_ticket.models import CandidateInfo, ShowRuntime
+
+    respx_mock.post(
+        "https://show.bilibili.com/api/ticket/order/prepare?project_id=1"
+    ).respond(
+        json={"code": 0, "message": "ok", "data": {"token": "token", "ptoken": ""}},
+    )
+    respx_mock.post(
+        "https://show.bilibili.com/api/ticket/order/createV2?project_id=1"
+    ).respond(
+        json={"code": 0, "message": "ok", "data": {"orderId": 9527}},
+    )
+    respx_mock.get("https://show.bilibili.com/api/ticket/order/info?order_id=9527").respond(
+        json={
+            "errno": 0,
+            "msg": "success",
+            "data": {
+                "pay_money": 20400,
+                "pay_remain_time": 600,
+                "ticket_info": {"name": "早鸟票"},
+                "buyer_infos": [
+                    {"buyer": "张*"},
+                    {"buyer": "李*"},
+                ],
+            },
+        }
+    )
+    runtime = ShowRuntime(
+        show_id="bw-2026",
+        project_id=1,
+        project_name="Bili World",
+        project_buyer_info="buyer-token",
+        id_bind=1,
+        count=2,
+        selected_buyers=[
+            {
+                "id": 1,
+                "name": "张三",
+                "tel": "13800000000",
+                "personal_id": "310101199001010011",
+                "id_type": 0,
+            },
+            {
+                "id": 2,
+                "name": "李四",
+                "tel": "13800000001",
+                "personal_id": "310101199001010012",
+                "id_type": 0,
+            },
+        ],
+        contact_name=None,
+        contact_phone=None,
+        candidates={
+            ("2026-05-01", 680): CandidateInfo(
+                date="2026-05-01",
+                price=680,
+                screen_id=11,
+                sku_id=101,
+                screen_name="2026-05-01 场次",
+                sku_desc="680档",
+            )
+        },
+    )
+
+    result = order_service.attempt_candidate(runtime, ("2026-05-01", 680))
+
+    assert result.success is True
+    assert result.order_id == 9527
+    assert result.order_url == "https://show.bilibili.com/platform/orderDetail.html?order_id=9527"
+    assert result.pay_money == 20400
+    assert result.pay_remain_seconds == 600
+    assert result.ticket_name == "早鸟票"
+    assert result.buyer_summary == "张*、李*"
+
+
 def test_attempt_candidate_returns_failed_result_when_prepare_is_rejected(order_service, respx_mock):
     from bilibili_ticket.models import CandidateInfo, ShowRuntime
 
@@ -363,3 +439,47 @@ def test_attempt_candidate_returns_failed_result_when_prepare_is_rejected(order_
     assert result.code == 83000005
     assert result.message == "不能为null"
     assert create_route.called is False
+
+
+def test_should_resume_locked_order_when_order_is_cancelled(order_service, respx_mock):
+    from bilibili_ticket.models import OrderResult
+
+    respx_mock.get("https://show.bilibili.com/api/ticket/order/info?order_id=9527").respond(
+        json={
+            "errno": 0,
+            "msg": "success",
+            "data": {
+                "status": 4,
+                "sub_status_name": "已取消",
+                "pay_remain_time": 0,
+            },
+        }
+    )
+
+    should_resume = order_service.should_resume_locked_order(
+        OrderResult(success=True, code=0, message="ok", order_id=9527)
+    )
+
+    assert should_resume is True
+
+
+def test_should_keep_locked_when_order_is_still_pending_payment(order_service, respx_mock):
+    from bilibili_ticket.models import OrderResult
+
+    respx_mock.get("https://show.bilibili.com/api/ticket/order/info?order_id=9527").respond(
+        json={
+            "errno": 0,
+            "msg": "success",
+            "data": {
+                "status": 1,
+                "sub_status_name": "待支付",
+                "pay_remain_time": 480,
+            },
+        }
+    )
+
+    should_resume = order_service.should_resume_locked_order(
+        OrderResult(success=True, code=0, message="ok", order_id=9527)
+    )
+
+    assert should_resume is False

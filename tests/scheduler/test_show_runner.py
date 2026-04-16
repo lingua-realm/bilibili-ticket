@@ -75,3 +75,67 @@ def test_pause_show_when_human_intervention_is_required():
     assert result.pause_candidate == ("2026-05-01", 680)
     assert "100044" in result.pause_reason
     assert runner.state.name == "PAUSED_FOR_HUMAN"
+
+
+def test_resume_monitoring_when_locked_order_is_released():
+    from bilibili_ticket.scheduler.show_runner import ShowRunner
+
+    executor = FakeOrderExecutor(
+        available_candidates=[("2026-05-01", 680)],
+        results={
+            ("2026-05-01", 680): OrderResult(success=True, code=0, message="ok", order_id=9528)
+        },
+    )
+    released_order = OrderResult(success=True, code=0, message="ok", order_id=9527)
+    checker_calls = []
+    runner = ShowRunner(
+        show_id="bw-2026",
+        date_priority=["2026-05-01"],
+        price_priority=[680],
+        available_candidates_provider=executor.list_available_candidates,
+        order_executor=executor.attempt_order,
+        locked_order_resume_checker=lambda order: checker_calls.append(order.order_id) or True,
+    )
+    runner.state = runner.state.LOCKED
+    runner.last_result = runner.last_result.__class__(
+        locked_candidate=("2026-05-01", 680),
+        stopped_remaining_candidates=True,
+        order_result=released_order,
+    )
+
+    result = runner.run_once()
+
+    assert checker_calls == [9527]
+    assert result.order_result.order_id == 9528
+    assert runner.state.name == "LOCKED"
+
+
+def test_keep_locked_state_when_order_is_still_payable():
+    from bilibili_ticket.scheduler.show_runner import ShowRunner
+
+    executor = FakeOrderExecutor(
+        available_candidates=[("2026-05-01", 680)],
+        results={
+            ("2026-05-01", 680): OrderResult(success=True, code=0, message="ok", order_id=9528)
+        },
+    )
+    runner = ShowRunner(
+        show_id="bw-2026",
+        date_priority=["2026-05-01"],
+        price_priority=[680],
+        available_candidates_provider=executor.list_available_candidates,
+        order_executor=executor.attempt_order,
+        locked_order_resume_checker=lambda order: False,
+    )
+    runner.state = runner.state.LOCKED
+    runner.last_result = runner.last_result.__class__(
+        locked_candidate=("2026-05-01", 680),
+        stopped_remaining_candidates=True,
+        order_result=OrderResult(success=True, code=0, message="ok", order_id=9527),
+    )
+
+    result = runner.run_once()
+
+    assert result.locked_candidate is None
+    assert result.order_result is None
+    assert runner.state.name == "LOCKED"

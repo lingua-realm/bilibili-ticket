@@ -57,6 +57,11 @@ class OrderResult:
     code: int
     message: str
     order_id: int | None = None
+    order_url: str | None = None
+    pay_money: int | None = None
+    pay_remain_seconds: int | None = None
+    buyer_summary: str | None = None
+    ticket_name: str | None = None
 
 
 @dataclass(slots=True)

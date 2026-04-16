@@ -48,7 +48,17 @@ def test_run_scheduler_sends_lock_success_once():
         last_result=ShowRunResult(
             locked_candidate=("2026-05-01", 680),
             stopped_remaining_candidates=True,
-            order_result=OrderResult(success=True, code=0, message="ok", order_id=9527),
+            order_result=OrderResult(
+                success=True,
+                code=0,
+                message="ok",
+                order_id=9527,
+                order_url="https://show.bilibili.com/platform/orderDetail.html?order_id=9527",
+                pay_money=20400,
+                pay_remain_seconds=600,
+                buyer_summary="张*、李*",
+                ticket_name="早鸟票",
+            ),
         ),
     )
     manager = FakeManager({"bw-2026": runner})
@@ -59,6 +69,9 @@ def test_run_scheduler_sends_lock_success_once():
     assert exit_code == 0
     assert len(notifier.lock_events) == 1
     assert notifier.lock_events[0].order_id == 9527
+    assert notifier.lock_events[0].order_url == "https://show.bilibili.com/platform/orderDetail.html?order_id=9527"
+    assert notifier.lock_events[0].pay_money == 20400
+    assert notifier.lock_events[0].pay_remain_seconds == 600
 
 
 def test_run_scheduler_sends_human_takeover_once():

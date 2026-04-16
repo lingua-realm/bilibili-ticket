@@ -203,11 +203,13 @@ class OrderService:
         )
         data = response.get("data", {})
         code = self._response_code(response)
+        order_id = data.get("orderId")
         return OrderResult(
             success=code == 0,
             code=code if code is not None else -1,
             message=self._response_message(response),
-            order_id=data.get("orderId"),
+            order_id=order_id,
+            order_url=self._build_order_url(order_id) if order_id is not None else None,
         )
 
     def list_available_candidates(self, runtime: ShowRuntime) -> list[tuple[str, int]]:
@@ -247,7 +249,33 @@ class OrderService:
         prepared.contact_phone = runtime.contact_phone
         prepared.buyer_info = runtime.selected_buyers
         prepared.device_id = self.client.device_id
-        return self.create_order(prepared)
+        result = self.create_order(prepared)
+        if result.success and result.order_id is not None:
+            self._enrich_success_result(
+                result=result,
+                candidate=candidate,
+                runtime=runtime,
+            )
+        return result
+
+    def should_resume_locked_order(self, result: OrderResult) -> bool:
+        if result.order_id is None:
+            return False
+        try:
+            payload = self.client.get_json(
+                f"https://show.bilibili.com/api/ticket/order/info?order_id={result.order_id}"
+            )
+        except Exception:
+            return False
+        data = payload.get("data", {})
+        status = data.get("status")
+        sub_status_name = str(data.get("sub_status_name") or "")
+        pay_remain_time = data.get("pay_remain_time")
+        if status == 1 and (pay_remain_time is None or pay_remain_time > 0):
+            return False
+        if "待支付" in sub_status_name or "待付款" in sub_status_name:
+            return False
+        return True
 
     @staticmethod
     def _response_code(response: dict) -> int | None:
@@ -267,3 +295,54 @@ class OrderService:
             "origin": timestamp - 21356,
             "now": timestamp,
         }
+
+    def _enrich_success_result(
+        self,
+        result: OrderResult,
+        candidate: CandidateInfo,
+        runtime: ShowRuntime,
+    ) -> None:
+        result.pay_money = candidate.price * runtime.count
+        result.ticket_name = candidate.sku_desc or None
+        result.buyer_summary = self._summarize_runtime_buyers(runtime.selected_buyers)
+        try:
+            payload = self.client.get_json(
+                f"https://show.bilibili.com/api/ticket/order/info?order_id={result.order_id}"
+            )
+        except Exception:
+            return
+        data = payload.get("data", {})
+        result.pay_money = data.get("pay_money") or result.pay_money
+        result.pay_remain_seconds = data.get("pay_remain_time")
+        result.ticket_name = (
+            data.get("ticket_info", {}).get("name")
+            or result.ticket_name
+        )
+        result.buyer_summary = (
+            self._summarize_order_buyers(data.get("buyer_infos", []))
+            or result.buyer_summary
+        )
+
+    @staticmethod
+    def _summarize_runtime_buyers(buyers: list[dict]) -> str | None:
+        names = [str(buyer.get("name", "")).strip() for buyer in buyers if buyer.get("name")]
+        if not names:
+            return None
+        return "、".join(OrderService._mask_name(name) for name in names)
+
+    @staticmethod
+    def _summarize_order_buyers(buyers: list[dict]) -> str | None:
+        names = [str(buyer.get("buyer", "")).strip() for buyer in buyers if buyer.get("buyer")]
+        if not names:
+            return None
+        return "、".join(names)
+
+    @staticmethod
+    def _mask_name(name: str) -> str:
+        if len(name) <= 1:
+            return name
+        return name[0] + "*" * (len(name) - 1)
+
+    @staticmethod
+    def _build_order_url(order_id: int) -> str:
+        return f"https://show.bilibili.com/platform/orderDetail.html?order_id={order_id}"

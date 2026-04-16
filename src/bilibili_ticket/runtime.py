@@ -66,6 +66,11 @@ def _dispatch_runner_events(
                         show_id=display_name,
                         candidate=locked_candidate,
                         order_id=order_result.order_id,
+                        order_url=order_result.order_url,
+                        pay_money=order_result.pay_money,
+                        pay_remain_seconds=order_result.pay_remain_seconds,
+                        buyer_summary=order_result.buyer_summary,
+                        ticket_name=order_result.ticket_name,
                     )
                 )
                 sent_lock_events.add(event_key)

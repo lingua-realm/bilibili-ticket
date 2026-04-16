@@ -11,12 +11,21 @@ def test_send_lock_success_message(respx_mock):
             show_id="bw-2026",
             candidate=("2026-05-01", 680),
             order_id=9527,
+            order_url="https://show.bilibili.com/platform/orderDetail.html?order_id=9527",
+            pay_money=20400,
+            pay_remain_seconds=600,
+            buyer_summary="张*、李*",
+            ticket_name="早鸟票",
         )
     )
 
     payload = route.calls.last.request.read().decode("utf-8")
-    assert "锁单成功" in payload
+    assert "笑死，抢到票了" in payload
     assert "9527" in payload
+    assert "早鸟票" in payload
+    assert "204.00元" in payload
+    assert "10分00秒" in payload
+    assert "[点击去支付](https://show.bilibili.com/platform/orderDetail.html?order_id=9527)" in payload
 
 
 def test_send_human_takeover_message(respx_mock):
@@ -30,7 +39,7 @@ def test_send_human_takeover_message(respx_mock):
     notifier.send_human_takeover(
         HumanInterventionEvent(
             show_id="bw-2026",
-            candidate=("2026-05-01", 680),
+            candidate=("2026-05-01", 6800),
             reason="[100044] captcha",
         )
     )
@@ -38,6 +47,7 @@ def test_send_human_takeover_message(respx_mock):
     payload = route.calls.last.request.read().decode("utf-8")
     assert "人工接管" in payload
     assert "100044" in payload
+    assert "68.00元" in payload
 
 
 def test_send_human_takeover_message_with_qr_image_and_link(tmp_path, respx_mock):
