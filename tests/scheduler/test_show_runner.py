@@ -136,6 +136,37 @@ def test_keep_locked_state_when_order_is_still_payable():
 
     result = runner.run_once()
 
-    assert result.locked_candidate is None
-    assert result.order_result is None
+    assert result.locked_candidate == ("2026-05-01", 680)
+    assert result.order_result.order_id == 9527
     assert runner.state.name == "LOCKED"
+
+
+def test_record_failed_attempts_during_polling_round():
+    from bilibili_ticket.scheduler.show_runner import ShowRunner
+
+    executor = FakeOrderExecutor(
+        available_candidates=[
+            ("2026-05-01", 8800),
+            ("2026-05-01", 6800),
+        ],
+        results={
+            ("2026-05-01", 8800): OrderResult(success=False, code=100017, message="票种不可售"),
+            ("2026-05-01", 6800): OrderResult(success=False, code=900001, message="前方拥堵，请重试."),
+        },
+    )
+    runner = ShowRunner(
+        show_id="bw-2026",
+        date_priority=["2026-05-01"],
+        price_priority=[8800, 6800],
+        available_candidates_provider=executor.list_available_candidates,
+        order_executor=executor.attempt_order,
+    )
+
+    result = runner.run_once()
+
+    assert result.available_candidates == [("2026-05-01", 8800), ("2026-05-01", 6800)]
+    assert len(result.attempt_records) == 2
+    assert result.attempt_records[0].candidate == ("2026-05-01", 8800)
+    assert result.attempt_records[0].code == 100017
+    assert result.attempt_records[1].candidate == ("2026-05-01", 6800)
+    assert result.attempt_records[1].message == "前方拥堵，请重试."

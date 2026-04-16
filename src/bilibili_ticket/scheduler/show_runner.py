@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Callable
 
@@ -22,6 +22,16 @@ class ShowRunResult:
     pause_candidate: tuple[str, int] | None = None
     pause_reason: str | None = None
     order_result: OrderResult | None = None
+    available_candidates: list[tuple[str, int]] = field(default_factory=list)
+    attempt_records: list["AttemptRecord"] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class AttemptRecord:
+    candidate: tuple[str, int]
+    success: bool
+    code: int
+    message: str
 
 
 class ShowRunner:
@@ -45,40 +55,65 @@ class ShowRunner:
 
     def run_once(self) -> ShowRunResult:
         if self.state == ShowState.PAUSED_FOR_HUMAN:
-            self.last_result = ShowRunResult(locked_candidate=None, stopped_remaining_candidates=False)
             return self.last_result
         if self.state == ShowState.LOCKED:
             if not self._should_resume_after_lock():
-                self.last_result = ShowRunResult(locked_candidate=None, stopped_remaining_candidates=False)
                 return self.last_result
             self.state = ShowState.RUNNING
 
+        available_candidates = self.available_candidates_provider()
         prioritized = prioritize_available_candidates(
-            available_candidates=self.available_candidates_provider(),
+            available_candidates=available_candidates,
             date_priority=self.date_priority,
             price_priority=self.price_priority,
         )
+        attempt_records: list[AttemptRecord] = []
         for candidate in prioritized:
             try:
                 result = self.order_executor(candidate)
             except HumanInterventionRequired as exc:
+                attempt_records.append(
+                    AttemptRecord(
+                        candidate=candidate,
+                        success=False,
+                        code=exc.code,
+                        message=exc.message,
+                    )
+                )
                 self.state = ShowState.PAUSED_FOR_HUMAN
                 self.last_result = ShowRunResult(
                     locked_candidate=None,
                     stopped_remaining_candidates=False,
                     pause_candidate=candidate,
                     pause_reason=str(exc),
+                    available_candidates=prioritized,
+                    attempt_records=attempt_records,
                 )
                 return self.last_result
+            attempt_records.append(
+                AttemptRecord(
+                    candidate=candidate,
+                    success=result.success,
+                    code=result.code,
+                    message=result.message,
+                )
+            )
             if result.success:
                 self.state = ShowState.LOCKED
                 self.last_result = ShowRunResult(
                     locked_candidate=candidate,
                     stopped_remaining_candidates=True,
                     order_result=result,
+                    available_candidates=prioritized,
+                    attempt_records=attempt_records,
                 )
                 return self.last_result
-        self.last_result = ShowRunResult(locked_candidate=None, stopped_remaining_candidates=False)
+        self.last_result = ShowRunResult(
+            locked_candidate=None,
+            stopped_remaining_candidates=False,
+            available_candidates=prioritized,
+            attempt_records=attempt_records,
+        )
         return self.last_result
 
     def _should_resume_after_lock(self) -> bool:
