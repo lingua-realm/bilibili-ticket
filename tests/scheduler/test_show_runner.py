@@ -1,0 +1,77 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import pytest
+
+from bilibili_ticket.errors import HumanInterventionRequired
+from bilibili_ticket.models import OrderResult
+
+
+@dataclass
+class FakeOrderExecutor:
+    available_candidates: list[tuple[str, int]]
+    results: dict[tuple[str, int], OrderResult]
+    raise_for_candidate: tuple[str, int] | None = None
+
+    def list_available_candidates(self) -> list[tuple[str, int]]:
+        return list(self.available_candidates)
+
+    def attempt_order(self, candidate: tuple[str, int]) -> OrderResult:
+        if self.raise_for_candidate == candidate:
+            raise HumanInterventionRequired(100044, "captcha")
+        return self.results[candidate]
+
+
+def test_stop_same_show_after_first_lock_success():
+    from bilibili_ticket.scheduler.show_runner import ShowRunner
+
+    executor = FakeOrderExecutor(
+        available_candidates=[
+            ("2026-05-02", 680),
+            ("2026-05-01", 480),
+        ],
+        results={
+            ("2026-05-01", 480): OrderResult(success=True, code=0, message="ok", order_id=9527),
+            ("2026-05-02", 680): OrderResult(success=True, code=0, message="ok", order_id=9528),
+        },
+    )
+    runner = ShowRunner(
+        show_id="bw-2026",
+        date_priority=["2026-05-01", "2026-05-02"],
+        price_priority=[680, 480],
+        available_candidates_provider=executor.list_available_candidates,
+        order_executor=executor.attempt_order,
+    )
+
+    result = runner.run_once()
+
+    assert result.locked_candidate == ("2026-05-01", 480)
+    assert result.stopped_remaining_candidates is True
+    assert result.pause_candidate is None
+    assert result.order_result.order_id == 9527
+    assert runner.state.name == "LOCKED"
+
+
+def test_pause_show_when_human_intervention_is_required():
+    from bilibili_ticket.scheduler.show_runner import ShowRunner
+
+    executor = FakeOrderExecutor(
+        available_candidates=[("2026-05-01", 680)],
+        results={},
+        raise_for_candidate=("2026-05-01", 680),
+    )
+    runner = ShowRunner(
+        show_id="bw-2026",
+        date_priority=["2026-05-01"],
+        price_priority=[680],
+        available_candidates_provider=executor.list_available_candidates,
+        order_executor=executor.attempt_order,
+    )
+
+    result = runner.run_once()
+
+    assert result.locked_candidate is None
+    assert result.pause_candidate == ("2026-05-01", 680)
+    assert "100044" in result.pause_reason
+    assert runner.state.name == "PAUSED_FOR_HUMAN"

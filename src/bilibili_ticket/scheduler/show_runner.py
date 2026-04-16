@@ -1,0 +1,75 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum, auto
+from typing import Callable
+
+from bilibili_ticket.errors import HumanInterventionRequired
+from bilibili_ticket.models import OrderResult
+from bilibili_ticket.scheduler.priority import prioritize_available_candidates
+
+
+class ShowState(Enum):
+    RUNNING = auto()
+    LOCKED = auto()
+    PAUSED_FOR_HUMAN = auto()
+
+
+@dataclass(slots=True)
+class ShowRunResult:
+    locked_candidate: tuple[str, int] | None
+    stopped_remaining_candidates: bool
+    pause_candidate: tuple[str, int] | None = None
+    pause_reason: str | None = None
+    order_result: OrderResult | None = None
+
+
+class ShowRunner:
+    def __init__(
+        self,
+        show_id: str,
+        date_priority: list[str],
+        price_priority: list[int],
+        available_candidates_provider: Callable[[], list[tuple[str, int]]],
+        order_executor: Callable[[tuple[str, int]], OrderResult],
+    ):
+        self.show_id = show_id
+        self.date_priority = date_priority
+        self.price_priority = price_priority
+        self.available_candidates_provider = available_candidates_provider
+        self.order_executor = order_executor
+        self.state = ShowState.RUNNING
+        self.last_result = ShowRunResult(locked_candidate=None, stopped_remaining_candidates=False)
+
+    def run_once(self) -> ShowRunResult:
+        if self.state in {ShowState.LOCKED, ShowState.PAUSED_FOR_HUMAN}:
+            self.last_result = ShowRunResult(locked_candidate=None, stopped_remaining_candidates=False)
+            return self.last_result
+
+        prioritized = prioritize_available_candidates(
+            available_candidates=self.available_candidates_provider(),
+            date_priority=self.date_priority,
+            price_priority=self.price_priority,
+        )
+        for candidate in prioritized:
+            try:
+                result = self.order_executor(candidate)
+            except HumanInterventionRequired as exc:
+                self.state = ShowState.PAUSED_FOR_HUMAN
+                self.last_result = ShowRunResult(
+                    locked_candidate=None,
+                    stopped_remaining_candidates=False,
+                    pause_candidate=candidate,
+                    pause_reason=str(exc),
+                )
+                return self.last_result
+            if result.success:
+                self.state = ShowState.LOCKED
+                self.last_result = ShowRunResult(
+                    locked_candidate=candidate,
+                    stopped_remaining_candidates=True,
+                    order_result=result,
+                )
+                return self.last_result
+        self.last_result = ShowRunResult(locked_candidate=None, stopped_remaining_candidates=False)
+        return self.last_result

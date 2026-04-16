@@ -1,0 +1,24 @@
+account:
+  session_file: data/session.json
+
+notifier:
+  type: wecom_webhook
+  webhook: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=replace-me
+
+shows:
+  - show_id: demo-show
+    project_id: 123456
+    date_priority:
+      - 2026-05-01
+      - 2026-05-02
+    price_priority:
+      - 680
+      - 480
+    allowed_skus:
+      - 680
+      - 480
+    count: 1
+    buyer_names:
+      - 张三
+    contact_name: 张三
+    contact_phone: 13800000000
