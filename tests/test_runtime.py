@@ -116,3 +116,51 @@ def test_run_scheduler_prefers_runner_display_name_for_notifications():
 
     assert exit_code == 0
     assert notifier.human_events[0].show_id == "真实演出标题"
+
+
+def test_run_scheduler_emits_iteration_status_lines():
+    from bilibili_ticket.runtime import run_scheduler
+    from bilibili_ticket.scheduler.show_runner import AttemptRecord
+
+    runner = FakeRunner(
+        state=FakeState("RUNNING"),
+        last_result=ShowRunResult(
+            locked_candidate=None,
+            stopped_remaining_candidates=False,
+            available_candidates=[("2026-05-01", 8800), ("2026-05-01", 6800)],
+            attempt_records=[
+                AttemptRecord(
+                    candidate=("2026-05-01", 8800),
+                    success=False,
+                    code=100017,
+                    message="票种不可售",
+                ),
+                AttemptRecord(
+                    candidate=("2026-05-01", 6800),
+                    success=False,
+                    code=900001,
+                    message="前方拥堵，请重试.",
+                ),
+            ],
+        ),
+        display_name="真实演出标题",
+    )
+    manager = FakeManager({"internal-show-id": runner})
+    notifier = FakeNotifier()
+    lines = []
+
+    exit_code = run_scheduler(
+        manager=manager,
+        notifier=notifier,
+        once=True,
+        sleep=lambda _: None,
+        status_writer=lines.extend,
+    )
+
+    assert exit_code == 0
+    assert len(lines) == 1
+    assert "真实演出标题" in lines[0]
+    assert "状态=RUNNING" in lines[0]
+    assert "2026-05-01/88.00元" in lines[0]
+    assert "100017" in lines[0]
+    assert "900001" in lines[0]

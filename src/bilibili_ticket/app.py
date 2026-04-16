@@ -20,6 +20,7 @@ from bilibili_ticket.runtime import run_scheduler
 from bilibili_ticket.scheduler.manager import ScheduleManager
 from bilibili_ticket.scheduler.priority import expand_candidates
 from bilibili_ticket.scheduler.show_runner import ShowRunner
+from bilibili_ticket.status import IterationStatusWriter
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -85,7 +86,13 @@ def _run_with_config(config, *, dry_run: bool, once: bool) -> int:
         session_snapshot=session,
         runner_factory=_build_runner_factory(),
     )
-    return run_scheduler(manager=manager, notifier=notifier, once=once)
+    status_writer = IterationStatusWriter(_default_status_log_file(config.account.session_file))
+    return run_scheduler(
+        manager=manager,
+        notifier=notifier,
+        once=once,
+        status_writer=status_writer,
+    )
 
 
 def _handle_daemon(
@@ -205,6 +212,11 @@ def _fetch_project_title(client: BilibiliClient, project_id: int) -> str | None:
 def _default_lock_file(session_file: str) -> Path:
     session_path = Path(session_file)
     return session_path.parent / "monitor.lock"
+
+
+def _default_status_log_file(session_file: str) -> Path:
+    session_path = Path(session_file)
+    return session_path.parent / "monitor.status.log"
 
 
 def main(argv: list[str] | None = None) -> int:

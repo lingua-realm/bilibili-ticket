@@ -119,6 +119,11 @@ uv run python -m bilibili_ticket.app run --config configs/tasks.local.yaml
 
 不带 `--once` 时，程序会持续轮询并监控回流。若启动时缺少登录态，也会先自动等待登录成功，再进入正式监控。
 同一演出锁单后，如果订单后来变成已取消、已失效或不再待支付，监控会自动恢复，不需要手动重启。
+每轮轮询的状态会同时打印到终端，并追加写入 `data/monitor.status.log`，可以用下面的命令实时查看：
+
+```bash
+tail -f data/monitor.status.log
+```
 
 ### 6. 用守护模式值守 24h
 

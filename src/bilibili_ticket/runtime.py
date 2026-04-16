@@ -16,6 +16,7 @@ def run_scheduler(
     once: bool = False,
     interval: float = 1.0,
     sleep: Callable[[float], None] | None = None,
+    status_writer: Callable[[list[str]], None] | None = None,
 ) -> int:
     pause = sleep or time.sleep
     sent_lock_events: set[tuple[str, int]] = set()
@@ -30,6 +31,8 @@ def run_scheduler(
                 sent_lock_events=sent_lock_events,
                 sent_human_events=sent_human_events,
             )
+            if status_writer is not None:
+                status_writer(_collect_iteration_status_lines(manager))
             if once:
                 return 0
             pause(interval)
@@ -92,3 +95,56 @@ def _dispatch_runner_events(
                     )
                 )
                 sent_human_events.add(event_key)
+
+
+def _collect_iteration_status_lines(manager) -> list[str]:
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    lines: list[str] = []
+    for show_id, runner in manager.runners.items():
+        display_name = getattr(runner, "display_name", None) or show_id
+        state_name = getattr(getattr(runner, "state", None), "name", "")
+        last_result = getattr(runner, "last_result", None)
+        available_candidates = getattr(last_result, "available_candidates", []) if last_result else []
+        attempt_records = getattr(last_result, "attempt_records", []) if last_result else []
+        locked_candidate = getattr(last_result, "locked_candidate", None) if last_result else None
+        order_result = getattr(last_result, "order_result", None) if last_result else None
+        pause_reason = getattr(last_result, "pause_reason", None) if last_result else None
+
+        parts = [
+            f"[{timestamp}]",
+            f"演出={display_name}",
+            f"状态={state_name or 'UNKNOWN'}",
+            f"可用={_format_candidates(available_candidates)}",
+        ]
+        if attempt_records:
+            parts.append(f"尝试={_format_attempts(attempt_records)}")
+        if locked_candidate is not None and order_result is not None and order_result.order_id is not None:
+            parts.append(
+                f"锁单={_format_candidate(locked_candidate)} 订单={order_result.order_id}"
+            )
+        if pause_reason:
+            parts.append(f"暂停={pause_reason}")
+        lines.append(" ".join(parts))
+    return lines
+
+
+def _format_candidates(candidates: list[tuple[str, int]]) -> str:
+    if not candidates:
+        return "无"
+    return ",".join(_format_candidate(candidate) for candidate in candidates)
+
+
+def _format_attempts(attempt_records) -> str:
+    return "; ".join(
+        (
+            f"{_format_candidate(record.candidate)} -> "
+            f"{'成功' if record.success else '失败'} "
+            f"code={record.code} {record.message}"
+        ).strip()
+        for record in attempt_records
+    )
+
+
+def _format_candidate(candidate: tuple[str, int]) -> str:
+    date_text, price = candidate
+    return f"{date_text}/{price / 100:.2f}元"

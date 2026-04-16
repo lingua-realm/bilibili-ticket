@@ -218,11 +218,12 @@ def test_cli_run_once_calls_runtime_scheduler(tmp_path, monkeypatch):
         def __init__(self, webhook):
             captured["webhook"] = webhook
 
-    def fake_run_scheduler(manager, notifier, *, once, interval=1.0, sleep=None):
+    def fake_run_scheduler(manager, notifier, *, once, interval=1.0, sleep=None, status_writer=None):
         captured["manager"] = manager
         captured["notifier"] = notifier
         captured["once"] = once
         captured["interval"] = interval
+        captured["status_writer"] = status_writer
         return 0
 
     monkeypatch.setattr(app, "load_app_config", lambda path: config)
@@ -238,6 +239,7 @@ def test_cli_run_once_calls_runtime_scheduler(tmp_path, monkeypatch):
     assert captured["session_snapshot"] == {"SESSDATA": "abc"}
     assert captured["webhook"] == "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"
     assert captured["once"] is True
+    assert callable(captured["status_writer"]) is True
 
 
 def test_cli_run_waits_for_login_and_then_calls_runtime_scheduler(tmp_path, monkeypatch):
@@ -318,10 +320,11 @@ def test_cli_run_waits_for_login_and_then_calls_runtime_scheduler(tmp_path, monk
             session_state.update({"SESSDATA": "abc", "bili_jct": "csrf"})
             return {"uname": "tester"}
 
-    def fake_run_scheduler(manager, notifier, *, once, interval=1.0, sleep=None):
+    def fake_run_scheduler(manager, notifier, *, once, interval=1.0, sleep=None, status_writer=None):
         captured["manager"] = manager
         captured["run_notifier"] = notifier
         captured["once"] = once
+        captured["status_writer"] = status_writer
         return 0
 
     monkeypatch.setattr(app, "load_app_config", lambda path: config)
@@ -346,6 +349,7 @@ def test_cli_run_waits_for_login_and_then_calls_runtime_scheduler(tmp_path, monk
     assert str(event.qr_image_path).endswith("data/login-qr.png")
     assert captured["session_snapshot"] == {"SESSDATA": "abc", "bili_jct": "csrf"}
     assert captured["once"] is True
+    assert callable(captured["status_writer"]) is True
 
 
 def test_cli_daemon_delegates_to_guarded_runner(tmp_path, monkeypatch):
