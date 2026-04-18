@@ -1,6 +1,6 @@
 # bilibili-ticket
 
-基于 `BHYG`、`Bili_Ticket_Monitor`、`bilibili-vipbuy` 的安全可复用部分整理出的半自动 B 站票务调度器。
+半自动 B 站票务调度器
 
 当前实现聚焦单账号、本机运行、配置驱动：
 
