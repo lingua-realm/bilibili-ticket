@@ -265,6 +265,8 @@ class OrderService:
                 count=runtime.count,
                 buyer_info=runtime.project_buyer_info,
             )
+        except httpx.HTTPStatusError as exc:
+            return self._http_status_error_result(exc)
         except OrderPreparationFailed as exc:
             return OrderResult(
                 success=False,

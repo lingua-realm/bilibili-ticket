@@ -3,10 +3,15 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 
+import httpx
+
 from bilibili_ticket.notifier.wecom import (
     HumanInterventionEvent,
     LockSuccessEvent,
 )
+
+
+RETRYABLE_HTTP_STATUS_CODES = {429}
 
 
 def run_scheduler(
@@ -24,7 +29,15 @@ def run_scheduler(
 
     try:
         while True:
-            manager.run_iteration()
+            try:
+                manager.run_iteration()
+            except httpx.HTTPStatusError as exc:
+                if not _is_retryable_http_status_error(exc):
+                    raise
+                if once:
+                    return 1
+                pause(interval)
+                continue
             _dispatch_runner_events(
                 manager=manager,
                 notifier=notifier,
@@ -38,6 +51,10 @@ def run_scheduler(
             pause(_next_delay_seconds(manager, interval))
     except KeyboardInterrupt:
         return 130
+
+
+def _is_retryable_http_status_error(exc: httpx.HTTPStatusError) -> bool:
+    return exc.response.status_code in RETRYABLE_HTTP_STATUS_CODES
 
 
 def _dispatch_runner_events(

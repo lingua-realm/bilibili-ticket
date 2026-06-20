@@ -15,7 +15,8 @@ LOW_FREQUENCY_DELAY_SECONDS = 30.0
 PREHEAT_DELAY_SECONDS = 1.0
 SPRINT_DELAY_SECONDS = 0.25
 FRONT_CROWD_BACKOFF_SECONDS = (0.3, 0.5, 0.8)
-FRONT_CROWD_CODES = {429, 100041, 900001}
+FRONT_CROWD_BUSINESS_CODES = {100041, 900001}
+RETRYABLE_HTTP_STATUS_CODES = {429}
 
 
 class ShowState(Enum):
@@ -228,7 +229,11 @@ class ShowRunner:
 
     @staticmethod
     def _is_front_crowd_result(result: OrderResult) -> bool:
-        return result.code in FRONT_CROWD_CODES or "前方拥堵" in result.message
+        return (
+            result.code in FRONT_CROWD_BUSINESS_CODES
+            or result.code in RETRYABLE_HTTP_STATUS_CODES
+            or "前方拥堵" in result.message
+        )
 
     @staticmethod
     def _shorter_delay(current: float | None, candidate: float | None) -> float | None:

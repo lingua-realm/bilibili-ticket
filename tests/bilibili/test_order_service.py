@@ -626,6 +626,58 @@ def test_attempt_candidate_returns_failed_result_when_prepare_is_rejected(order_
     assert create_route.called is False
 
 
+def test_attempt_candidate_returns_failed_result_when_prepare_is_http_429(order_service, respx_mock):
+    from bilibili_ticket.models import CandidateInfo, ShowRuntime
+
+    respx_mock.post(
+        "https://show.bilibili.com/api/ticket/order/prepare?project_id=1"
+    ).respond(
+        status_code=429,
+        json={"message": "Too Many Requests"},
+    )
+    create_route = respx_mock.post(
+        "https://show.bilibili.com/api/ticket/order/createV2?project_id=1"
+    ).respond(
+        json={"code": 0, "message": "ok", "data": {"orderId": 9527}},
+    )
+    runtime = ShowRuntime(
+        show_id="bw-2026",
+        project_id=1,
+        project_name="Bili World",
+        project_buyer_info="buyer-token",
+        id_bind=1,
+        count=1,
+        selected_buyers=[
+            {
+                "id": 1,
+                "name": "张三",
+                "tel": "13800000000",
+                "personal_id": "310101199001010011",
+                "id_type": 0,
+            }
+        ],
+        contact_name=None,
+        contact_phone=None,
+        candidates={
+            ("2026-05-01", 680): CandidateInfo(
+                date="2026-05-01",
+                price=680,
+                screen_id=11,
+                sku_id=101,
+                screen_name="2026-05-01 场次",
+                sku_desc="680档",
+            )
+        },
+    )
+
+    result = order_service.attempt_candidate(runtime, ("2026-05-01", 680))
+
+    assert result.success is False
+    assert result.code == 429
+    assert result.message == "HTTP 429 Too Many Requests"
+    assert create_route.called is False
+
+
 def test_should_resume_locked_order_when_order_is_cancelled(order_service, respx_mock):
     from bilibili_ticket.models import OrderResult
 

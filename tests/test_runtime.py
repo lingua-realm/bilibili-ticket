@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import httpx
+
 from bilibili_ticket.models import OrderResult
 from bilibili_ticket.scheduler.show_runner import ShowRunResult
 
@@ -19,12 +21,17 @@ class FakeRunner:
 
 
 class FakeManager:
-    def __init__(self, runners):
+    def __init__(self, runners, failures=None):
         self.runners = runners
         self.run_count = 0
+        self.failures = list(failures or [])
 
     def run_iteration(self):
         self.run_count += 1
+        if self.failures:
+            failure = self.failures.pop(0)
+            if isinstance(failure, BaseException):
+                raise failure
         return {}
 
 
@@ -195,3 +202,35 @@ def test_run_scheduler_uses_runner_suggested_next_delay():
 
     assert exit_code == 130
     assert sleeps == [0.3]
+
+
+def test_run_scheduler_retries_after_http_429():
+    from bilibili_ticket.runtime import run_scheduler
+
+    request = httpx.Request("GET", "https://show.bilibili.com/api/ticket/project/getV2")
+    response = httpx.Response(429, request=request)
+    manager = FakeManager(
+        {},
+        failures=[
+            httpx.HTTPStatusError(
+                "Client error '429 Too Many Requests'",
+                request=request,
+                response=response,
+            ),
+            KeyboardInterrupt(),
+        ],
+    )
+    notifier = FakeNotifier()
+    sleeps = []
+
+    exit_code = run_scheduler(
+        manager=manager,
+        notifier=notifier,
+        once=False,
+        interval=1.0,
+        sleep=sleeps.append,
+    )
+
+    assert exit_code == 130
+    assert manager.run_count == 2
+    assert sleeps == [1.0]
