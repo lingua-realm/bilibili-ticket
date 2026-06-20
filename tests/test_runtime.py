@@ -164,3 +164,34 @@ def test_run_scheduler_emits_iteration_status_lines():
     assert "2026-05-01/88.00元" in lines[0]
     assert "100017" in lines[0]
     assert "900001" in lines[0]
+
+
+def test_run_scheduler_uses_runner_suggested_next_delay():
+    from bilibili_ticket.runtime import run_scheduler
+
+    runner = FakeRunner(
+        state=FakeState("RUNNING"),
+        last_result=ShowRunResult(
+            locked_candidate=None,
+            stopped_remaining_candidates=False,
+            next_delay_seconds=0.3,
+        ),
+    )
+    manager = FakeManager({"bw-2026": runner})
+    notifier = FakeNotifier()
+    sleeps = []
+
+    def stop_after_sleep(delay):
+        sleeps.append(delay)
+        raise KeyboardInterrupt
+
+    exit_code = run_scheduler(
+        manager=manager,
+        notifier=notifier,
+        once=False,
+        interval=1.0,
+        sleep=stop_after_sleep,
+    )
+
+    assert exit_code == 130
+    assert sleeps == [0.3]

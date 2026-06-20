@@ -35,7 +35,7 @@ def run_scheduler(
                 status_writer(_collect_iteration_status_lines(manager))
             if once:
                 return 0
-            pause(interval)
+            pause(_next_delay_seconds(manager, interval))
     except KeyboardInterrupt:
         return 130
 
@@ -109,6 +109,8 @@ def _collect_iteration_status_lines(manager) -> list[str]:
         locked_candidate = getattr(last_result, "locked_candidate", None) if last_result else None
         order_result = getattr(last_result, "order_result", None) if last_result else None
         pause_reason = getattr(last_result, "pause_reason", None) if last_result else None
+        phase = getattr(last_result, "phase", None) if last_result else None
+        seconds_until_sale = getattr(last_result, "seconds_until_sale", None) if last_result else None
 
         parts = [
             f"[{timestamp}]",
@@ -116,6 +118,10 @@ def _collect_iteration_status_lines(manager) -> list[str]:
             f"状态={state_name or 'UNKNOWN'}",
             f"可用={_format_candidates(available_candidates)}",
         ]
+        if phase:
+            parts.append(f"阶段={phase}")
+        if seconds_until_sale is not None:
+            parts.append(f"开售倒计时={_format_countdown(seconds_until_sale)}")
         if attempt_records:
             parts.append(f"尝试={_format_attempts(attempt_records)}")
         if locked_candidate is not None and order_result is not None and order_result.order_id is not None:
@@ -132,6 +138,24 @@ def _format_candidates(candidates: list[tuple[str, int]]) -> str:
     if not candidates:
         return "无"
     return ",".join(_format_candidate(candidate) for candidate in candidates)
+
+
+def _next_delay_seconds(manager, default_interval: float) -> float:
+    delays = []
+    for runner in manager.runners.values():
+        last_result = getattr(runner, "last_result", None)
+        delay = getattr(last_result, "next_delay_seconds", None) if last_result else None
+        if delay is not None:
+            delays.append(float(delay))
+    if not delays:
+        return default_interval
+    return min(delays)
+
+
+def _format_countdown(seconds: float) -> str:
+    if seconds <= 0:
+        return "已开售"
+    return f"{seconds:.1f}s"
 
 
 def _format_attempts(attempt_records) -> str:

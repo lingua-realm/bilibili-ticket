@@ -4,6 +4,8 @@ import json
 import time
 from typing import Iterable
 
+import httpx
+
 from bilibili_ticket.bilibili.client import BilibiliClient
 from bilibili_ticket.errors import HumanInterventionRequired, OrderPreparationFailed
 from bilibili_ticket.models import (
@@ -76,12 +78,18 @@ class OrderService:
                     allowed_prices=set(show.allowed_skus),
                 )
         else:
-            self._collect_candidates(
-                candidates=candidates,
-                screens=project_data.get("screen_list", []),
-                date_text=show.date_priority[0],
-                allowed_prices=set(show.allowed_skus),
-            )
+            allowed_dates = set(show.date_priority)
+            allowed_prices = set(show.allowed_skus)
+            for screen in project_data.get("screen_list", []):
+                screen_date = self._screen_date(screen)
+                if screen_date not in allowed_dates:
+                    continue
+                self._collect_candidates(
+                    candidates=candidates,
+                    screens=[screen],
+                    date_text=screen_date,
+                    allowed_prices=allowed_prices,
+                )
         return candidates
 
     def _collect_candidates(
@@ -104,7 +112,23 @@ class OrderService:
                     sku_id=int(sku["id"]),
                     screen_name=screen.get("name", ""),
                     sku_desc=sku.get("desc", ""),
+                    sale_start=self._sale_start(sku),
                 )
+
+    @staticmethod
+    def _screen_date(screen: dict) -> str | None:
+        start_time_str = screen.get("start_time_str")
+        if start_time_str:
+            return str(start_time_str)
+        name = str(screen.get("name") or "").strip()
+        return name.split()[0] if name else None
+
+    @staticmethod
+    def _sale_start(sku: dict) -> int | None:
+        sale_start = sku.get("saleStart")
+        if sale_start is None:
+            return None
+        return int(sale_start)
 
     def _select_buyers(self, show: ShowTaskConfig, id_bind: int) -> list[dict]:
         if id_bind == 0:
@@ -115,7 +139,8 @@ class OrderService:
         )
         buyers = buyer_payload.get("data", {}).get("list", [])
         selected = [buyer for buyer in buyers if buyer.get("name") in show.buyer_names]
-        if len(selected) != show.count:
+        required_buyer_count = len(show.buyer_names) if show.buyer_names else show.count
+        if len(selected) != required_buyer_count:
             raise ValueError("selected buyers do not match required count")
         return [
             {
@@ -177,30 +202,33 @@ class OrderService:
 
     def create_order(self, prepared: PreparedOrder) -> OrderResult:
         timestamp = int(time.time() * 1000)
-        response = self.client.post_json(
-            f"https://show.bilibili.com/api/ticket/order/createV2?project_id={prepared.project_id}",
-            json={
-                "project_id": prepared.project_id,
-                "screen_id": prepared.screen_id,
-                "sku_id": prepared.sku_id,
-                "count": prepared.count,
-                "pay_money": prepared.pay_money,
-                "order_type": prepared.order_type,
-                "timestamp": timestamp,
-                "id_bind": prepared.id_bind,
-                "need_contact": 1 if prepared.id_bind == 0 else 0,
-                "is_package": 0,
-                "package_num": 1,
-                "buyer_info": json.dumps(prepared.buyer_info, ensure_ascii=False),
-                "token": prepared.token,
-                "deviceId": prepared.device_id,
-                "buyer": prepared.contact_name,
-                "tel": prepared.contact_phone,
-                "clickPosition": self._build_click_position(timestamp),
-                "requestSource": "neul-next",
-                "newRisk": True,
-            },
-        )
+        try:
+            response = self.client.post_json(
+                f"https://show.bilibili.com/api/ticket/order/createV2?project_id={prepared.project_id}",
+                json={
+                    "project_id": prepared.project_id,
+                    "screen_id": prepared.screen_id,
+                    "sku_id": prepared.sku_id,
+                    "count": prepared.count,
+                    "pay_money": prepared.pay_money,
+                    "order_type": prepared.order_type,
+                    "timestamp": timestamp,
+                    "id_bind": prepared.id_bind,
+                    "need_contact": 1 if prepared.id_bind == 0 else 0,
+                    "is_package": 0,
+                    "package_num": 1,
+                    "buyer_info": json.dumps(prepared.buyer_info, ensure_ascii=False),
+                    "token": prepared.token,
+                    "deviceId": prepared.device_id,
+                    "buyer": prepared.contact_name,
+                    "tel": prepared.contact_phone,
+                    "clickPosition": self._build_click_position(timestamp),
+                    "requestSource": "neul-next",
+                    "newRisk": True,
+                },
+            )
+        except httpx.HTTPStatusError as exc:
+            return self._http_status_error_result(exc)
         data = response.get("data", {})
         code = self._response_code(response)
         order_id = data.get("orderId")
@@ -286,6 +314,15 @@ class OrderService:
     @staticmethod
     def _response_message(response: dict) -> str:
         return str(response.get("message") or response.get("msg") or "")
+
+    @staticmethod
+    def _http_status_error_result(exc: httpx.HTTPStatusError) -> OrderResult:
+        response = exc.response
+        return OrderResult(
+            success=False,
+            code=response.status_code,
+            message=f"HTTP {response.status_code} {response.reason_phrase}".strip(),
+        )
 
     @staticmethod
     def _build_click_position(timestamp: int) -> dict[str, int]:

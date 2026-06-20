@@ -125,6 +125,7 @@ def _build_runner_factory():
             available_candidates_provider=lambda: order_service.list_available_candidates(runtime),
             order_executor=lambda candidate: order_service.attempt_candidate(runtime, candidate),
             locked_order_resume_checker=order_service.should_resume_locked_order,
+            candidate_sale_start_provider=lambda candidate: runtime.candidates[candidate].sale_start,
         )
         runner.display_name = runtime.project_name
         return runner

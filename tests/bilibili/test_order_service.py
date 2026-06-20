@@ -181,6 +181,33 @@ def test_create_order_accepts_errno_response_and_sends_required_fields(order_ser
     assert "clickPosition" in sent_payload
 
 
+def test_create_order_returns_unsuccessful_result_on_http_429(order_service, respx_mock):
+    from bilibili_ticket.models import PreparedOrder
+
+    respx_mock.post(
+        "https://show.bilibili.com/api/ticket/order/createV2?project_id=1"
+    ).respond(
+        status_code=429,
+        json={"message": "Too Many Requests"},
+    )
+
+    result = order_service.create_order(
+        PreparedOrder(
+            project_id=1,
+            screen_id=2,
+            sku_id=3,
+            count=1,
+            buyer_info=[],
+            token="token",
+            ptoken="",
+        )
+    )
+
+    assert result.success is False
+    assert result.code == 429
+    assert result.message == "HTTP 429 Too Many Requests"
+
+
 def test_build_show_runtime_resolves_candidates_and_buyers(
     order_service,
     respx_mock,
@@ -261,6 +288,164 @@ def test_build_show_runtime_resolves_candidates_and_buyers(
         ("2026-05-02", 680),
     ]
     assert runtime.selected_buyers[0]["name"] == "张三"
+
+
+def test_build_show_runtime_allows_package_ticket_with_more_buyers_than_count(
+    order_service,
+    respx_mock,
+):
+    from bilibili_ticket.models import ShowTaskConfig
+
+    show = ShowTaskConfig(
+        show_id="package-2026",
+        project_id=1,
+        date_priority=["2026-05-01"],
+        price_priority=[12800],
+        allowed_skus=[12800],
+        count=1,
+        buyer_names=["张三", "李四", "王五", "赵六"],
+    )
+    respx_mock.get("https://show.bilibili.com/api/ticket/project/getV2").respond(
+        json={
+            "code": 0,
+            "data": {
+                "name": "Package Show",
+                "project_type": 1,
+                "buyer_info": "buyer-token",
+                "id_bind": 1,
+                "screen_list": [
+                    {
+                        "id": 11,
+                        "name": "2026-05-01 场次",
+                        "ticket_list": [
+                            {"id": 101, "price": 12800, "desc": "四人票"},
+                        ],
+                    }
+                ],
+            },
+        }
+    )
+    respx_mock.get("https://show.bilibili.com/api/ticket/buyer/list").respond(
+        json={
+            "code": 0,
+            "data": {
+                "list": [
+                    {
+                        "id": 1,
+                        "name": "张三",
+                        "tel": "13800000000",
+                        "personal_id": "310101199001010011",
+                        "id_type": 0,
+                    },
+                    {
+                        "id": 2,
+                        "name": "李四",
+                        "tel": "13800000001",
+                        "personal_id": "310101199001010012",
+                        "id_type": 0,
+                    },
+                    {
+                        "id": 3,
+                        "name": "王五",
+                        "tel": "13800000002",
+                        "personal_id": "310101199001010013",
+                        "id_type": 0,
+                    },
+                    {
+                        "id": 4,
+                        "name": "赵六",
+                        "tel": "13800000003",
+                        "personal_id": "310101199001010014",
+                        "id_type": 0,
+                    },
+                ]
+            },
+        }
+    )
+
+    runtime = order_service.build_show_runtime(show)
+
+    assert runtime.count == 1
+    assert [buyer["name"] for buyer in runtime.selected_buyers] == [
+        "张三",
+        "李四",
+        "王五",
+        "赵六",
+    ]
+
+
+def test_build_show_runtime_filters_project_type_one_candidates_by_screen_date(
+    order_service,
+    respx_mock,
+):
+    from bilibili_ticket.models import ShowTaskConfig
+
+    show = ShowTaskConfig(
+        show_id="dated-show",
+        project_id=1,
+        date_priority=["2026-05-02"],
+        price_priority=[18800],
+        allowed_skus=[18800],
+        count=1,
+        buyer_names=["张三"],
+    )
+    respx_mock.get("https://show.bilibili.com/api/ticket/project/getV2").respond(
+        json={
+            "code": 0,
+            "data": {
+                "name": "Dated Show",
+                "project_type": 1,
+                "buyer_info": "buyer-token",
+                "id_bind": 1,
+                "screen_list": [
+                    {
+                        "id": 11,
+                        "name": "2026-05-01 周五",
+                        "start_time_str": "2026-05-01",
+                        "ticket_list": [
+                            {"id": 101, "price": 18800, "desc": "普通票"},
+                        ],
+                    },
+                    {
+                        "id": 12,
+                        "name": "2026-05-02 周六",
+                        "start_time_str": "2026-05-02",
+                        "ticket_list": [
+                            {
+                                "id": 201,
+                                "price": 18800,
+                                "desc": "普通票",
+                                "saleStart": 1781949600,
+                            },
+                        ],
+                    },
+                ],
+            },
+        }
+    )
+    respx_mock.get("https://show.bilibili.com/api/ticket/buyer/list").respond(
+        json={
+            "code": 0,
+            "data": {
+                "list": [
+                    {
+                        "id": 1,
+                        "name": "张三",
+                        "tel": "13800000000",
+                        "personal_id": "310101199001010011",
+                        "id_type": 0,
+                    }
+                ]
+            },
+        }
+    )
+
+    runtime = order_service.build_show_runtime(show)
+
+    candidate = runtime.candidates[("2026-05-02", 18800)]
+    assert candidate.screen_id == 12
+    assert candidate.sku_id == 201
+    assert candidate.sale_start == 1781949600
 
 
 def test_attempt_candidate_prepares_and_creates_order(order_service, respx_mock):

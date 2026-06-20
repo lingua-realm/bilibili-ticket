@@ -72,6 +72,7 @@ class CandidateInfo:
     sku_id: int
     screen_name: str
     sku_desc: str
+    sale_start: int | None = None
 
 
 @dataclass(slots=True)
