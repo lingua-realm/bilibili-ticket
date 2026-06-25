@@ -1,43 +1,51 @@
 from __future__ import annotations
 
-import uuid
+import time
 
-import httpx
-
-
-DEFAULT_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/135.0.0.0 Safari/537.36"
-    ),
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-    "Referer": "https://show.bilibili.com/",
-}
+from bilibili_ticket.bilibili.request import (
+    BiliConnectionError,
+    BiliRateLimitError,
+    BiliRiskControlError,
+    BiliSession,
+    RequestConfig,
+)
 
 
 class BilibiliClient:
-    """Minimal HTTP client wrapper for Bilibili ticket APIs."""
+    """HTTP client wrapper for Bilibili ticket APIs."""
 
-    def __init__(self, cookies: dict[str, str] | None = None):
-        self.cookies = cookies or {}
-        self.session = httpx.Client(
-            cookies=self.cookies,
-            headers=DEFAULT_HEADERS,
-            timeout=10.0,
+    def __init__(
+        self,
+        cookies: dict[str, str] | None = None,
+        request_config: RequestConfig | None = None,
+        sleep=None,
+    ):
+        self.request_config = request_config or RequestConfig()
+        self.transport = BiliSession(
+            cookies=cookies,
+            config=self.request_config,
         )
-        self.device_id = uuid.uuid4().hex
+        self.session = self.transport.requests_session
+        self.device_id = self.transport.browser_state.device_id
+        self.sleep = sleep or time.sleep
 
     def get_json(self, url: str, **kwargs) -> dict:
-        response = self.session.get(url, **kwargs)
-        response.raise_for_status()
-        return response.json()
+        return self._json_with_recovery("GET", url, **kwargs)
 
     def post_json(self, url: str, **kwargs) -> dict:
-        response = self.session.post(url, **kwargs)
-        response.raise_for_status()
-        return response.json()
+        return self._json_with_recovery("POST", url, **kwargs)
+
+    def prewarm_connection(self, url: str) -> None:
+        self.transport.prewarm_connection(url)
+
+    def recover_after_risk_control(self, reason: str) -> bool:
+        return self.transport.mark_failure_and_switch_proxy(reason)
+
+    def current_proxy_status(self) -> str:
+        return self.transport.current_proxy_status()
+
+    def proxy_pool_status(self) -> str:
+        return self.transport.proxy_pool_status()
 
     def generate_qr_url(self) -> tuple[str, str]:
         payload = self.get_json(
@@ -63,4 +71,31 @@ class BilibiliClient:
         return payload["data"]
 
     def export_cookies(self) -> dict[str, str]:
-        return {cookie.name: cookie.value for cookie in self.session.cookies.jar}
+        return self.transport.export_cookies()
+
+    def _json_with_recovery(self, method: str, url: str, **kwargs) -> dict:
+        risk_retries = 0
+        rate_limit_retries = 0
+        connection_retries = 0
+        while True:
+            try:
+                return self.transport.request_json(method, url, **kwargs)
+            except BiliRiskControlError:
+                if risk_retries >= self.request_config.risk_retry_limit:
+                    raise
+                if not self.recover_after_risk_control("HTTP 412"):
+                    raise
+                risk_retries += 1
+                self.sleep(self.request_config.proxy_backoff_seconds)
+            except BiliRateLimitError:
+                if rate_limit_retries >= self.request_config.rate_limit_retry_limit:
+                    raise
+                self.transport.mark_failure_and_switch_proxy("HTTP 429")
+                rate_limit_retries += 1
+                self.sleep(self.request_config.rate_limit_delay_seconds)
+            except BiliConnectionError:
+                if connection_retries >= self.request_config.connection_retry_limit:
+                    raise
+                self.transport.mark_failure_and_switch_proxy("connection error")
+                connection_retries += 1
+                self.sleep(self.request_config.proxy_backoff_seconds)

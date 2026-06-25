@@ -7,6 +7,7 @@ from typing import Iterable
 import httpx
 
 from bilibili_ticket.bilibili.client import BilibiliClient
+from bilibili_ticket.bilibili.request import BiliRateLimitError, BiliRiskControlError
 from bilibili_ticket.errors import HumanInterventionRequired, OrderPreparationFailed
 from bilibili_ticket.models import (
     CandidateInfo,
@@ -162,23 +163,46 @@ class OrderService:
         buyer_info: object,
         order_type: int = DEFAULT_ORDER_TYPE,
     ) -> PreparedOrder:
-        response = self.client.post_json(
-            f"https://show.bilibili.com/api/ticket/order/prepare?project_id={project_id}",
-            json={
-                "project_id": project_id,
-                "screen_id": screen_id,
-                "order_type": order_type,
-                "sku_id": sku_id,
-                "count": count,
-                "buyer_info": buyer_info,
-                "ticket_agent": "",
-                "token": "",
-                "requestSource": "neul-next",
-                "newRisk": True,
-            },
-        )
-        response_code = self._response_code(response)
-        if response_code in {-401, 100044, 412}:
+        risk_retries = 0
+        while True:
+            try:
+                response = self.client.post_json(
+                    f"https://show.bilibili.com/api/ticket/order/prepare?project_id={project_id}",
+                    json={
+                        "project_id": project_id,
+                        "screen_id": screen_id,
+                        "order_type": order_type,
+                        "sku_id": sku_id,
+                        "count": count,
+                        "buyer_info": buyer_info,
+                        "ticket_agent": "",
+                        "token": "",
+                        "requestSource": "neul-next",
+                        "newRisk": True,
+                    },
+                )
+            except BiliRiskControlError as exc:
+                raise HumanInterventionRequired(
+                    code=exc.code,
+                    message="触发风控校验，代理重试耗尽，请人工接管",
+                ) from exc
+            except BiliRateLimitError as exc:
+                raise OrderPreparationFailed(
+                    code=exc.code,
+                    message=str(exc) or "HTTP 429 Too Many Requests",
+                ) from exc
+
+            response_code = self._response_code(response)
+            if response_code == 412:
+                if self._recover_after_risk_control("prepare returned 412", risk_retries):
+                    risk_retries += 1
+                    continue
+                raise HumanInterventionRequired(
+                    code=response_code,
+                    message="触发风控校验，代理重试耗尽，请人工接管",
+                )
+            break
+        if response_code in {-401, 100044}:
             raise HumanInterventionRequired(
                 code=response_code,
                 message="触发风控校验，请人工接管",
@@ -226,6 +250,17 @@ class OrderService:
                     "requestSource": "neul-next",
                     "newRisk": True,
                 },
+            )
+        except BiliRiskControlError as exc:
+            raise HumanInterventionRequired(
+                code=exc.code,
+                message="触发风控校验，代理重试耗尽，请人工接管",
+            ) from exc
+        except BiliRateLimitError as exc:
+            return OrderResult(
+                success=False,
+                code=exc.code,
+                message=str(exc) or "HTTP 429 Too Many Requests",
             )
         except httpx.HTTPStatusError as exc:
             return self._http_status_error_result(exc)
@@ -316,6 +351,16 @@ class OrderService:
     @staticmethod
     def _response_message(response: dict) -> str:
         return str(response.get("message") or response.get("msg") or "")
+
+    def _recover_after_risk_control(self, reason: str, retry_count: int) -> bool:
+        request_config = getattr(self.client, "request_config", None)
+        retry_limit = int(getattr(request_config, "risk_retry_limit", 3))
+        if retry_count >= retry_limit:
+            return False
+        recover = getattr(self.client, "recover_after_risk_control", None)
+        if recover is None:
+            return False
+        return bool(recover(reason))
 
     @staticmethod
     def _http_status_error_result(exc: httpx.HTTPStatusError) -> OrderResult:

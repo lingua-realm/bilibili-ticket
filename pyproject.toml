@@ -7,9 +7,10 @@ name = "bilibili-ticket"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "httpx",
+    "httpx[http2]",
     "PyYAML",
     "qrcode[pil]",
+    "requests",
 ]
 
 [project.optional-dependencies]

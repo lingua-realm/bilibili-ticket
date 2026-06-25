@@ -51,7 +51,7 @@ def test_check_stock_returns_false_when_stock_status_is_not_3(order_service, res
     assert order_service.check_stock(project_id=1, screen_id=2, sku_id=3) is False
 
 
-@pytest.mark.parametrize("response_code", [-401, 100044, 412])
+@pytest.mark.parametrize("response_code", [-401, 100044])
 def test_prepare_order_pauses_for_human_on_risk_code(
     order_service,
     respx_mock,
@@ -67,6 +67,66 @@ def test_prepare_order_pauses_for_human_on_risk_code(
 
     with pytest.raises(HumanInterventionRequired, match="触发风控校验，请人工接管"):
         order_service.prepare_order(
+            project_id=1,
+            screen_id=2,
+            sku_id=3,
+            count=1,
+            buyer_info=[],
+        )
+
+
+def test_prepare_order_retries_business_412_before_success():
+    from bilibili_ticket.bilibili.order_service import OrderService
+
+    class FakeClient:
+        device_id = "device"
+
+        def __init__(self):
+            self.responses = [
+                {"code": 412, "message": "risk", "data": {"ga_data": {}}},
+                {"code": 0, "message": "ok", "data": {"token": "token", "ptoken": ""}},
+            ]
+            self.recovery_reasons = []
+
+        def post_json(self, url, **kwargs):
+            return self.responses.pop(0)
+
+        def recover_after_risk_control(self, reason):
+            self.recovery_reasons.append(reason)
+            return True
+
+    client = FakeClient()
+    service = OrderService(client)
+
+    prepared = service.prepare_order(
+        project_id=1,
+        screen_id=2,
+        sku_id=3,
+        count=1,
+        buyer_info=[],
+    )
+
+    assert prepared.token == "token"
+    assert client.recovery_reasons == ["prepare returned 412"]
+
+
+def test_prepare_order_pauses_when_business_412_recovery_is_exhausted():
+    from bilibili_ticket.bilibili.order_service import OrderService
+    from bilibili_ticket.errors import HumanInterventionRequired
+
+    class FakeClient:
+        device_id = "device"
+
+        def post_json(self, url, **kwargs):
+            return {"code": 412, "message": "risk", "data": {"ga_data": {}}}
+
+        def recover_after_risk_control(self, reason):
+            return False
+
+    service = OrderService(FakeClient())
+
+    with pytest.raises(HumanInterventionRequired, match="代理重试耗尽"):
+        service.prepare_order(
             project_id=1,
             screen_id=2,
             sku_id=3,
