@@ -44,6 +44,16 @@ cp configs/tasks.yaml.example configs/tasks.local.yaml
 account:
   session_file: data/session.json
 
+request:
+  max_concurrent_requests: 1
+  proxy_pool: []
+  proxy_failure_threshold: 2
+  proxy_cooldown_seconds: 60
+  proxy_backoff_seconds: 1
+  risk_retry_limit: 3
+  rate_limit_retry_limit: 3
+  rate_limit_delay_seconds: 1
+
 notifier:
   type: wecom_webhook
   webhook: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=replace-me
@@ -65,6 +75,13 @@ shows:
       - 张三
     contact_name: 张三
     contact_phone: 13800000000
+    attempt_strategy: auto
+    order_concurrency: 1
+    order_interval_ms: 0
+    stock_interval_ms: null
+    sale_start_at: "2026-05-01 20:00:00"
+    sprint_bypass_before_seconds: 5
+    sprint_bypass_after_seconds: 120
 ```
 
 优先级规则：
@@ -73,6 +90,21 @@ shows:
 - 再按 `price_priority`
 - 只有同时出现在优先级白名单里的候选才会尝试下单
 - `price_priority` 和 `allowed_skus` 的单位是“分”，例如 `68元` 写成 `6800`
+
+请求与重试规则：
+
+- `proxy_pool` 为空时直连；配置代理后，HTTP `412`、HTTP `429` 和网络异常会优先切换到下一个可用代理
+- 代理连续失败达到 `proxy_failure_threshold` 后进入 `proxy_cooldown_seconds` 冷却
+- `risk_retry_limit` 控制 `412` 风控重试上限；耗尽后暂停演出并通知人工接管
+- `rate_limit_retry_limit` 和 `rate_limit_delay_seconds` 控制 HTTP `429` 的自动重试
+- `max_concurrent_requests` 是全局请求并发上限；默认 `1` 保持串行
+- `attempt_strategy: stock_first` 适合回流监控，始终先查库存
+- `attempt_strategy: sprint_bypass` 适合定点冲单，只在开售冲刺/已开售阶段绕过库存接口，直接尝试已解析出的候选
+- `attempt_strategy: auto` 适合提前启动脚本；开售窗口外刷库存，开售前 `sprint_bypass_before_seconds` 秒到开售后 `sprint_bypass_after_seconds` 秒自动跳过库存并直接下单
+- `order_concurrency` 控制抢票窗口内同一候选票档的并发下单数，最终会被 `max_concurrent_requests` 裁剪
+- `order_interval_ms` 控制并发下单 worker 的错峰启动间隔，单位毫秒；`0` 表示同时启动
+- `stock_interval_ms` 控制无库存时下一轮库存轮询间隔，单位毫秒；`null` 表示使用程序默认间隔
+- `sale_start_at` 可手动指定开售时间，格式如 `2026-05-01 20:00:00`；如果不配置，则优先使用 B 站接口返回的票档 `saleStart`
 
 ### 2. 登录并保存会话
 

@@ -1,24 +1,126 @@
+# 账号配置，对应 AppConfig.account
 account:
+  # 会话 cookie 保存路径，对应 AccountConfig.session_file；
+  # 登录成功后 SessionStore 会把 SESSDATA、bili_jct 等 cookie 写入这里。
   session_file: data/session.json
 
+# 请求层配置，对应 AppConfig.request / RequestConfig
+request:
+  # 全局请求并发上限，对应 RequestConfig.max_concurrent_requests；
+  # 会限制单演出下单并发的最大值。默认 1 表示不并发。
+  max_concurrent_requests: 1
+
+  # 代理池，对应 RequestConfig.proxy_pool；
+  # 为空数组表示直连。配置后 HTTP 412、HTTP 429、网络异常会尝试切换代理。
+  # 示例：
+  # proxy_pool:
+  #   - http://user:pass@127.0.0.1:7890
+  #   - socks5://127.0.0.1:1080
+  proxy_pool: []
+
+  # 单个代理连续失败多少次后进入冷却，对应 RequestConfig.proxy_failure_threshold。
+  proxy_failure_threshold: 2
+
+  # 代理冷却时间，单位秒，对应 RequestConfig.proxy_cooldown_seconds。
+  proxy_cooldown_seconds: 60
+
+  # 代理池切换/网络异常后的退避等待时间，单位秒，对应 RequestConfig.proxy_backoff_seconds。
+  proxy_backoff_seconds: 1
+
+  # HTTP 412 风控重试上限，对应 RequestConfig.risk_retry_limit；
+  # 耗尽后该演出会暂停并等待人工接管。
+  risk_retry_limit: 3
+
+  # HTTP 429 限流重试上限，对应 RequestConfig.rate_limit_retry_limit。
+  rate_limit_retry_limit: 3
+
+  # HTTP 429 每次重试前等待时间，单位秒，对应 RequestConfig.rate_limit_delay_seconds。
+  rate_limit_delay_seconds: 1
+
+  # 网络连接异常重试上限，对应 RequestConfig.connection_retry_limit。
+  connection_retry_limit: 1
+
+# 通知配置，对应 AppConfig.notifier / NotifierConfig
 notifier:
+  # 通知类型，对应 NotifierConfig.type；当前仅支持 wecom_webhook。
   type: wecom_webhook
+
+  # 企业微信群机器人 webhook，对应 NotifierConfig.webhook；
+  # 真实 key 只放 tasks.local.yaml，不要提交到仓库。
   webhook: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=replace-me
 
+# 演出任务列表，对应 AppConfig.shows: list[ShowTaskConfig]
 shows:
+  # 本地任务 ID，对应 ShowTaskConfig.show_id；
+  # 用于日志、状态和通知去重，不会发给 B 站接口。
   - show_id: demo-show
+
+    # B 站会员购项目 ID，对应 ShowTaskConfig.project_id；
+    # 会作为 project_id/id 传给 project/getV2、stock/check、prepare、createV2 等接口。
     project_id: 123456
+
+    # 日期优先级，对应 ShowTaskConfig.date_priority；
+    # 单演出内先按这里的顺序挑日期。
     date_priority:
       - 2026-05-01
       - 2026-05-02
+
+    # 票价优先级，对应 ShowTaskConfig.price_priority；
+    # 单位是“分”，例如 68 元写 6800；同一日期下按这里的顺序尝试。
     price_priority:
       - 6800
       - 4800
+
+    # 允许参与下单的票价白名单，对应 ShowTaskConfig.allowed_skus；
+    # 当前代码按 sku.price 过滤，不是 B 站 sku_id；单位同样是“分”。
     allowed_skus:
       - 6800
       - 4800
+
+    # 购买数量，对应 ShowTaskConfig.count；
+    # 会进入 prepare/create 请求的 count 字段。
     count: 1
+
+    # 购票人姓名列表，对应 ShowTaskConfig.buyer_names；
+    # 会从 buyer/list 返回结果中按 name 匹配，并生成 create 请求的 buyer_info。
     buyer_names:
       - 张三
+
+    # 联系人姓名，对应 ShowTaskConfig.contact_name；
+    # createV2 请求里会作为 buyer 字段，主要用于不实名绑定或需要联系人信息的项目。
     contact_name: 张三
+
+    # 联系人手机号，对应 ShowTaskConfig.contact_phone；
+    # createV2 请求里会作为 tel 字段。
     contact_phone: 13800000000
+
+    # 下单策略，对应 ShowTaskConfig.attempt_strategy / ShowRunner.attempt_strategy；
+    # stock_first: 始终先 stock/check，有库存再 prepare/create，适合长期刷回流。
+    # sprint_bypass: 冲刺/开售阶段跳过 stock/check，直接 prepare/create，适合定点冲单。
+    # auto: 开售窗口外 stock_first，窗口内 sprint_bypass，适合提前很久启动脚本。
+    attempt_strategy: auto
+
+    # 抢票窗口内同一候选票档的并发下单数，对应 ShowTaskConfig.order_concurrency；
+    # 最终生效值还会被 request.max_concurrent_requests 裁剪。默认 1 表示保持串行。
+    order_concurrency: 1
+
+    # 并发下单 worker 的错峰启动间隔，单位毫秒；
+    # 对应 ShowTaskConfig.order_interval_ms。0 表示同时启动。
+    order_interval_ms: 0
+
+    # 无库存时下一轮库存轮询间隔，单位毫秒；
+    # 对应 ShowTaskConfig.stock_interval_ms。null 表示使用程序默认轮询间隔。
+    stock_interval_ms: null
+
+    # 手动指定开售时间，对应 ShowTaskConfig.sale_start_at；
+    # 配置后优先于接口返回的 saleStart。未带时区时按 Asia/Shanghai 解析。
+    sale_start_at: "2026-05-01 20:00:00"
+
+    # auto 模式下，开售前多少秒开始跳过 stock/check 直接下单；
+    # 对应 ShowTaskConfig.sprint_bypass_before_seconds。
+    sprint_bypass_before_seconds: 5
+
+    # auto 模式下，开售后多少秒内继续跳过 stock/check 直接下单；
+    # 超过该窗口后恢复 stock_first 刷回流。
+    # 对应 ShowTaskConfig.sprint_bypass_after_seconds。
+    sprint_bypass_after_seconds: 120
