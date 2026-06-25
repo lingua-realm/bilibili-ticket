@@ -296,6 +296,182 @@ def test_http_429_failure_uses_front_crowd_backoff():
     assert second.next_delay_seconds == 0.5
 
 
+def test_sprint_bypass_attempts_candidate_without_stock_inside_sprint_window():
+    from bilibili_ticket.scheduler.show_runner import ShowRunner
+
+    attempts = []
+    stock_checks = []
+    executor = FakeOrderExecutor(
+        available_candidates=[],
+        results={
+            ("2026-07-11", 12800): OrderResult(success=True, code=0, message="ok", order_id=9527)
+        },
+        attempts=attempts,
+    )
+
+    def list_available_candidates():
+        stock_checks.append("called")
+        return executor.list_available_candidates()
+
+    runner = ShowRunner(
+        show_id="bw-2026",
+        date_priority=["2026-07-11"],
+        price_priority=[12800],
+        available_candidates_provider=list_available_candidates,
+        order_executor=executor.attempt_order,
+        candidate_sale_start_provider=lambda _: 100.0,
+        attempt_strategy="sprint_bypass",
+        now=lambda: 98.0,
+    )
+
+    result = runner.run_once()
+
+    assert attempts == [("2026-07-11", 12800)]
+    assert stock_checks == []
+    assert result.available_candidates == [("2026-07-11", 12800)]
+    assert result.locked_candidate == ("2026-07-11", 12800)
+
+
+def test_stock_first_strategy_does_not_bypass_stock_inside_sprint_window():
+    from bilibili_ticket.scheduler.show_runner import ShowRunner
+
+    attempts = []
+    executor = FakeOrderExecutor(
+        available_candidates=[],
+        results={
+            ("2026-07-11", 12800): OrderResult(success=True, code=0, message="ok", order_id=9527)
+        },
+        attempts=attempts,
+    )
+    runner = ShowRunner(
+        show_id="bw-2026",
+        date_priority=["2026-07-11"],
+        price_priority=[12800],
+        available_candidates_provider=executor.list_available_candidates,
+        order_executor=executor.attempt_order,
+        candidate_sale_start_provider=lambda _: 100.0,
+        attempt_strategy="stock_first",
+        now=lambda: 98.0,
+    )
+
+    result = runner.run_once()
+
+    assert attempts == []
+    assert result.available_candidates == []
+    assert result.attempt_records == []
+
+
+def test_auto_strategy_bypasses_stock_from_five_seconds_before_sale():
+    from bilibili_ticket.scheduler.show_runner import ShowRunner
+
+    attempts = []
+    stock_checks = []
+    executor = FakeOrderExecutor(
+        available_candidates=[],
+        results={
+            ("2026-07-11", 12800): OrderResult(success=True, code=0, message="ok", order_id=9527)
+        },
+        attempts=attempts,
+    )
+
+    def list_available_candidates():
+        stock_checks.append("called")
+        return executor.list_available_candidates()
+
+    runner = ShowRunner(
+        show_id="bw-2026",
+        date_priority=["2026-07-11"],
+        price_priority=[12800],
+        available_candidates_provider=list_available_candidates,
+        order_executor=executor.attempt_order,
+        candidate_sale_start_provider=lambda _: 100.0,
+        attempt_strategy="auto",
+        sprint_bypass_before_seconds=5.0,
+        sprint_bypass_after_seconds=120.0,
+        now=lambda: 95.0,
+    )
+
+    result = runner.run_once()
+
+    assert stock_checks == []
+    assert attempts == [("2026-07-11", 12800)]
+    assert result.locked_candidate == ("2026-07-11", 12800)
+
+
+def test_auto_strategy_uses_stock_before_bypass_window():
+    from bilibili_ticket.scheduler.show_runner import ShowRunner
+
+    attempts = []
+    stock_checks = []
+    executor = FakeOrderExecutor(
+        available_candidates=[],
+        results={
+            ("2026-07-11", 12800): OrderResult(success=True, code=0, message="ok", order_id=9527)
+        },
+        attempts=attempts,
+    )
+
+    def list_available_candidates():
+        stock_checks.append("called")
+        return executor.list_available_candidates()
+
+    runner = ShowRunner(
+        show_id="bw-2026",
+        date_priority=["2026-07-11"],
+        price_priority=[12800],
+        available_candidates_provider=list_available_candidates,
+        order_executor=executor.attempt_order,
+        candidate_sale_start_provider=lambda _: 100.0,
+        attempt_strategy="auto",
+        sprint_bypass_before_seconds=5.0,
+        sprint_bypass_after_seconds=120.0,
+        now=lambda: 94.9,
+    )
+
+    result = runner.run_once()
+
+    assert stock_checks == ["called"]
+    assert attempts == []
+    assert result.available_candidates == []
+
+
+def test_auto_strategy_returns_to_stock_after_bypass_window():
+    from bilibili_ticket.scheduler.show_runner import ShowRunner
+
+    attempts = []
+    stock_checks = []
+    executor = FakeOrderExecutor(
+        available_candidates=[],
+        results={
+            ("2026-07-11", 12800): OrderResult(success=True, code=0, message="ok", order_id=9527)
+        },
+        attempts=attempts,
+    )
+
+    def list_available_candidates():
+        stock_checks.append("called")
+        return executor.list_available_candidates()
+
+    runner = ShowRunner(
+        show_id="bw-2026",
+        date_priority=["2026-07-11"],
+        price_priority=[12800],
+        available_candidates_provider=list_available_candidates,
+        order_executor=executor.attempt_order,
+        candidate_sale_start_provider=lambda _: 100.0,
+        attempt_strategy="auto",
+        sprint_bypass_before_seconds=5.0,
+        sprint_bypass_after_seconds=120.0,
+        now=lambda: 220.1,
+    )
+
+    result = runner.run_once()
+
+    assert stock_checks == ["called"]
+    assert attempts == []
+    assert result.available_candidates == []
+
+
 def test_unknown_sale_start_keeps_default_retry_delay_after_failed_attempt():
     from bilibili_ticket.scheduler.show_runner import ShowRunner
 
@@ -320,3 +496,70 @@ def test_unknown_sale_start_keeps_default_retry_delay_after_failed_attempt():
     result = runner.run_once()
 
     assert result.next_delay_seconds == 1.0
+
+
+def test_configured_order_concurrency_retries_same_candidate_with_staggered_starts():
+    from bilibili_ticket.scheduler.show_runner import ShowRunner
+
+    attempts = []
+    sleep_calls = []
+    executor = FakeOrderExecutor(
+        available_candidates=[],
+        results={
+            ("2026-07-11", 12800): OrderResult(
+                success=False,
+                code=100017,
+                message="票种不可售",
+            )
+        },
+        attempts=attempts,
+    )
+    runner = ShowRunner(
+        show_id="bw-2026",
+        date_priority=["2026-07-11"],
+        price_priority=[12800],
+        available_candidates_provider=executor.list_available_candidates,
+        order_executor=executor.attempt_order,
+        candidate_sale_start_provider=lambda _: 100.0,
+        attempt_strategy="sprint_bypass",
+        order_concurrency=3,
+        order_interval_ms=250,
+        sleep=lambda seconds: sleep_calls.append(seconds),
+        now=lambda: 100.0,
+    )
+
+    result = runner.run_once()
+
+    assert attempts == [
+        ("2026-07-11", 12800),
+        ("2026-07-11", 12800),
+        ("2026-07-11", 12800),
+    ]
+    assert sorted(sleep_calls) == [0.25, 0.5]
+    assert [record.candidate for record in result.attempt_records] == attempts
+    assert result.next_delay_seconds == 0.25
+
+
+def test_configured_stock_interval_controls_empty_stock_poll_delay():
+    from bilibili_ticket.scheduler.show_runner import ShowRunner
+
+    attempts = []
+    executor = FakeOrderExecutor(
+        available_candidates=[],
+        results={},
+        attempts=attempts,
+    )
+    runner = ShowRunner(
+        show_id="bw-2026",
+        date_priority=["2026-07-11"],
+        price_priority=[12800],
+        available_candidates_provider=executor.list_available_candidates,
+        order_executor=executor.attempt_order,
+        stock_interval_ms=1500,
+    )
+
+    result = runner.run_once()
+
+    assert attempts == []
+    assert result.available_candidates == []
+    assert result.next_delay_seconds == 1.5

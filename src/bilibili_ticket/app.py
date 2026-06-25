@@ -84,7 +84,7 @@ def _run_with_config(config, *, dry_run: bool, once: bool) -> int:
     manager = ScheduleManager(
         configs=config.shows,
         session_snapshot=session,
-        runner_factory=_build_runner_factory(),
+        runner_factory=_build_runner_factory(config.request),
     )
     status_writer = IterationStatusWriter(_default_status_log_file(config.account.session_file))
     return run_scheduler(
@@ -113,11 +113,15 @@ def _handle_daemon(
         return 1
 
 
-def _build_runner_factory():
+def _build_runner_factory(request_config=None):
     def factory(show_config, session_snapshot):
-        client = BilibiliClient(cookies=session_snapshot)
+        client = BilibiliClient(
+            cookies=session_snapshot,
+            request_config=request_config,
+        )
         order_service = OrderService(client)
         runtime = order_service.build_show_runtime(show_config)
+        client.prewarm_connection("https://show.bilibili.com/")
         runner = ShowRunner(
             show_id=show_config.show_id,
             date_priority=show_config.date_priority,
@@ -125,12 +129,33 @@ def _build_runner_factory():
             available_candidates_provider=lambda: order_service.list_available_candidates(runtime),
             order_executor=lambda candidate: order_service.attempt_candidate(runtime, candidate),
             locked_order_resume_checker=order_service.should_resume_locked_order,
-            candidate_sale_start_provider=lambda candidate: runtime.candidates[candidate].sale_start,
+            candidate_sale_start_provider=lambda candidate: (
+                show_config.sale_start_at
+                if show_config.sale_start_at is not None
+                else runtime.candidates[candidate].sale_start
+            ),
+            candidate_provider=lambda: list(runtime.candidates),
+            attempt_strategy=show_config.attempt_strategy,
+            sprint_bypass_before_seconds=show_config.sprint_bypass_before_seconds,
+            sprint_bypass_after_seconds=show_config.sprint_bypass_after_seconds,
+            order_concurrency=_effective_order_concurrency(show_config, request_config),
+            order_interval_ms=show_config.order_interval_ms,
+            stock_interval_ms=show_config.stock_interval_ms,
         )
         runner.display_name = runtime.project_name
         return runner
 
     return factory
+
+
+def _effective_order_concurrency(show_config, request_config) -> int:
+    order_concurrency = int(getattr(show_config, "order_concurrency", 1))
+    if request_config is None:
+        return order_concurrency
+    max_concurrent = int(
+        getattr(request_config, "max_concurrent_requests", order_concurrency)
+    )
+    return max(1, min(order_concurrency, max_concurrent))
 
 
 def _build_notifier(notifier_type: str, webhook: str):

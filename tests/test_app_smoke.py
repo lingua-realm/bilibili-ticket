@@ -242,6 +242,116 @@ def test_cli_run_once_calls_runtime_scheduler(tmp_path, monkeypatch):
     assert callable(captured["status_writer"]) is True
 
 
+def test_runner_factory_prefers_configured_sale_start_at(monkeypatch):
+    import bilibili_ticket.app as app
+    from bilibili_ticket.models import CandidateInfo, ShowRuntime, ShowTaskConfig
+
+    captured = {}
+    show = ShowTaskConfig(
+        show_id="bw-2026",
+        project_id=123456,
+        date_priority=["2026-07-11"],
+        price_priority=[12800],
+        allowed_skus=[12800],
+        attempt_strategy="auto",
+        sale_start_at=100.0,
+        sprint_bypass_before_seconds=5.0,
+        sprint_bypass_after_seconds=120.0,
+        order_concurrency=3,
+        order_interval_ms=250,
+        stock_interval_ms=1500,
+    )
+
+    class FakeClient:
+        def __init__(self, cookies=None, request_config=None):
+            captured["cookies"] = cookies
+            captured["request_config"] = request_config
+
+        def prewarm_connection(self, url):
+            captured["prewarm_url"] = url
+
+    class FakeOrderService:
+        def __init__(self, client):
+            captured["client"] = client
+
+        def build_show_runtime(self, show_config):
+            return ShowRuntime(
+                show_id=show_config.show_id,
+                project_id=show_config.project_id,
+                project_name="Bili World",
+                project_buyer_info="buyer-token",
+                id_bind=1,
+                count=1,
+                selected_buyers=[],
+                contact_name=None,
+                contact_phone=None,
+                candidates={
+                    ("2026-07-11", 12800): CandidateInfo(
+                        date="2026-07-11",
+                        price=12800,
+                        screen_id=11,
+                        sku_id=101,
+                        screen_name="2026-07-11 场次",
+                        sku_desc="普通票",
+                        sale_start=200.0,
+                    )
+                },
+            )
+
+        def list_available_candidates(self, runtime):
+            return []
+
+        def attempt_candidate(self, runtime, candidate):
+            raise AssertionError("not called")
+
+        def should_resume_locked_order(self, order):
+            return False
+
+    class FakeRunner:
+        def __init__(self, **kwargs):
+            captured["runner_kwargs"] = kwargs
+
+    monkeypatch.setattr(app, "BilibiliClient", FakeClient)
+    monkeypatch.setattr(app, "OrderService", FakeOrderService)
+    monkeypatch.setattr(app, "ShowRunner", FakeRunner)
+
+    factory = app._build_runner_factory(request_config="request-config")
+    factory(show, {"SESSDATA": "abc"})
+
+    provider = captured["runner_kwargs"]["candidate_sale_start_provider"]
+    assert provider(("2026-07-11", 12800)) == 100.0
+    assert captured["runner_kwargs"]["attempt_strategy"] == "auto"
+    assert captured["runner_kwargs"]["sprint_bypass_before_seconds"] == 5.0
+    assert captured["runner_kwargs"]["sprint_bypass_after_seconds"] == 120.0
+    assert captured["runner_kwargs"]["order_concurrency"] == 3
+    assert captured["runner_kwargs"]["order_interval_ms"] == 250
+    assert captured["runner_kwargs"]["stock_interval_ms"] == 1500
+    assert captured["request_config"] == "request-config"
+    assert captured["prewarm_url"] == "https://show.bilibili.com/"
+
+
+def test_effective_order_concurrency_is_capped_by_request_config():
+    import bilibili_ticket.app as app
+    from bilibili_ticket.bilibili.request import RequestConfig
+    from bilibili_ticket.models import ShowTaskConfig
+
+    show = ShowTaskConfig(
+        show_id="bw-2026",
+        project_id=123456,
+        date_priority=["2026-07-11"],
+        price_priority=[12800],
+        allowed_skus=[12800],
+        order_concurrency=4,
+    )
+
+    result = app._effective_order_concurrency(
+        show,
+        RequestConfig(max_concurrent_requests=2),
+    )
+
+    assert result == 2
+
+
 def test_cli_run_waits_for_login_and_then_calls_runtime_scheduler(tmp_path, monkeypatch):
     import bilibili_ticket.app as app
     from bilibili_ticket.models import AppConfig, AccountConfig, NotifierConfig, ShowTaskConfig

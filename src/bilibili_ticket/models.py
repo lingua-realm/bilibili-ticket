@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from bilibili_ticket.bilibili.request import RequestConfig
+
 
 @dataclass(slots=True)
 class AccountConfig:
@@ -25,6 +27,13 @@ class ShowTaskConfig:
     buyer_names: list[str] = field(default_factory=list)
     contact_name: str | None = None
     contact_phone: str | None = None
+    attempt_strategy: str = "stock_first"
+    sale_start_at: float | None = None
+    sprint_bypass_before_seconds: float = 5.0
+    sprint_bypass_after_seconds: float = 120.0
+    order_concurrency: int = 1
+    order_interval_ms: int = 0
+    stock_interval_ms: int | None = None
 
 
 @dataclass(slots=True)
@@ -32,6 +41,7 @@ class AppConfig:
     account: AccountConfig
     notifier: NotifierConfig
     shows: list[ShowTaskConfig]
+    request: RequestConfig = field(default_factory=RequestConfig)
 
 
 @dataclass(slots=True)
